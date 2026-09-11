@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ScanSearch } from "lucide-react";
 import { toast } from "sonner";
 import { CardsPanel } from "@/components/trace/cards-panel";
@@ -18,6 +18,8 @@ import { CYCLE_LABELS, STATUS_LABELS } from "@/lib/subscriptions/types";
 
 type Props = { onAdded?: () => void };
 
+const PASS_KEY = "traze-imap-pass";
+
 export function ScanPanel({ onAdded }: Props) {
   const items = useLedger((s) => s.items);
   const cards = useLedger((s) => s.cards);
@@ -29,7 +31,17 @@ export function ScanPanel({ onAdded }: Props) {
   const setLastScanAt = useLedger((s) => s.setLastScanAt);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ScanResponse | null>(null);
-  const [passwords, setPasswords] = useState<Record<string, string>>({});
+  const [passwords, setPasswords] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(PASS_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    sessionStorage.setItem(PASS_KEY, JSON.stringify(passwords));
+  }, [passwords]);
 
   const runScan = useCallback(async () => {
     setBusy(true);
@@ -43,6 +55,14 @@ export function ScanPanel({ onAdded }: Props) {
           pass: passwords[box.id] ?? "",
         }))
         .filter((box) => box.pass);
+      if (mailboxes.length > 0 && imap.length === 0) {
+        setResult({
+          ok: false,
+          kind: "error",
+          message: "Enter the app password next to the mailbox, then Scan mail.",
+        });
+        return;
+      }
       const next = await scanInbox({
         data: { last4s: cards.map((c) => c.last4), imap },
       });
@@ -103,7 +123,7 @@ export function ScanPanel({ onAdded }: Props) {
           <div className="min-w-0 max-w-xl">
             <h2 className="font-display text-2xl font-medium tracking-tight">Scan inbox</h2>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              On this Mac, Grok Gmail is not attached. Add IMAP (app password) or drop a bank CSV. Gmail through Grok only works in the Grok preview.
+              On this Mac, Grok Gmail is not attached. Paste the app password next to the mailbox, or drop a bank CSV.
             </p>
           </div>
           <Button onClick={() => void runScan()} disabled={busy}>
@@ -111,18 +131,13 @@ export function ScanPanel({ onAdded }: Props) {
             {busy ? "Scanning…" : "Scan mail"}
           </Button>
         </div>
-        {lastScanAt && !(result && !result.ok) ? (
-          <p className="mt-3 text-xs text-muted-foreground">
-            Last scan {new Date(lastScanAt).toLocaleString("en-HK")}
-          </p>
-        ) : null}
       </section>
 
       {result && !result.ok ? (
         <div className="rounded-3xl bg-card px-5 py-8 text-center shadow-[var(--shadow-border)]">
           <p className="font-medium">{result.message}</p>
           <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-            Local run cannot use Grok Gmail. Add an IMAP mailbox with an app password, or drop a statement CSV above.
+            The mailbox address is saved. The app password is not — paste it in the box next to the address, then scan.
           </p>
           <Button className="mt-5" variant="secondary" onClick={() => void runScan()}>
             Try again
