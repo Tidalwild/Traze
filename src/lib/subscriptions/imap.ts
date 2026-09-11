@@ -1,9 +1,23 @@
 import { createServerFn } from "@tanstack/react-start";
 import { parseEmail, type EmailStub } from "./parse-receipts";
 import { sanitizeImapList, type ImapAccountInput } from "./mail-accounts";
+import { scorePaymentLikelihood } from "./payment-filter";
 
 export type { ImapAccountInput } from "./mail-accounts";
 export { IMAP_PRESETS, sanitizeImapAccount, sanitizeImapList } from "./mail-accounts";
+
+const SUBJECT_QUERIES = [
+  "receipt",
+  "invoice",
+  "subscription",
+  "payment",
+  "renewal",
+  "billing",
+  "charged",
+  "your order",
+  "your purchase",
+  "transaction alert",
+];
 
 export async function fetchImapMailbox(
   account: ImapAccountInput,
@@ -14,26 +28,37 @@ export async function fetchImapMailbox(
       host: account.host,
       port: account.port,
       secure: account.port === 993,
-      auth: { user: account.user, pass: account.pass },
+      auth: { user: account.user, pass: account.pass.replace(/\s+/g, "") },
       logger: false,
     });
     const timer = setTimeout(() => {
       void client.close();
-    }, 12_000);
+    }, 45_000);
     await client.connect();
     const lock = await client.getMailboxLock("INBOX");
     const stubs: EmailStub[] = [];
+    const seen = new Set<string>();
     try {
       const since = new Date();
-      since.setMonth(since.getMonth() - 18);
-      const uids = await client.search({ since }, { uid: true });
-      const list = (Array.isArray(uids) ? uids : []).slice(-80);
-      if (list.length) {
+      since.setMonth(since.getMonth() - 12);
+      for (const query of SUBJECT_QUERIES) {
+        if (stubs.length >= 120) break;
+        let uids: unknown;
+        try {
+          uids = await client.search({ since, subject: query }, { uid: true });
+        } catch {
+          continue;
+        }
+        const list = (Array.isArray(uids) ? uids : []).slice(-24);
+        if (!list.length) continue;
         for await (const msg of client.fetch(
           list,
           { envelope: true, source: true, uid: true },
           { uid: true },
         )) {
+          const uid = String(msg.uid ?? "");
+          if (!uid || seen.has(uid) || stubs.length >= 120) continue;
+          seen.add(uid);
           const env = msg.envelope;
           const from = formatImapAddr(env?.from?.[0]);
           const to = (env?.to ?? []).map(formatImapAddr).filter(Boolean);
@@ -52,22 +77,15 @@ export async function fetchImapMailbox(
                 .filter(Boolean)
                 .join("\n")
                 .replace(/\s+/g, " ")
-                .slice(0, 12_000);
+                .slice(0, 8_000);
             } catch {
-              body = stripImapSource(raw.toString("utf8").slice(0, 20_000));
+              body = stripImapSource(raw.toString("utf8").slice(0, 12_000));
             }
           }
-          const blob = `${from}\n${subject}\n${body}`;
-          if (
-            !/receipt|invoice|subscription|transaction|renew|billing|apple|stripe|paypal|github|hsbc|amex|visa|mastercard|netflix|spotify|icloud|charged|payment|membership|statement|workspace|youtube|nordvpn|openai|microsoft/i.test(
-              blob,
-            )
-          ) {
-            continue;
-          }
-          const id = String(msg.uid ?? env?.messageId ?? `${account.user}-${stubs.length}`);
+          const scored = scorePaymentLikelihood(subject, from, body);
+          if (!scored.isPayment) continue;
           stubs.push({
-            messageId: `imap-${account.user}-${id}`,
+            messageId: `imap-${account.user}-${uid}`,
             subject,
             from,
             to: to.length ? to : [account.email ?? account.user],
@@ -101,7 +119,9 @@ function stripImapSource(source: string): string {
   return body
     .replace(/<[^>]+>/g, " ")
     .replace(/=\r?\n/g, "")
-    .replace(/=([0-9A-F]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    .replace(/=([0-9A-F]{2})/gi, (_, hex: string) =>
+      String.fromCharCode(Number.parseInt(hex, 16)),
+    )
     .replace(/\s+/g, " ")
     .slice(0, 8_000);
 }
