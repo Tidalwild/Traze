@@ -50,6 +50,8 @@ export const CARD_NETWORKS = [
 ] as const;
 export type CardNetwork = (typeof CARD_NETWORKS)[number];
 
+export const MAX_SAVED_CARDS = 8;
+
 export type PaymentVia = {
   kind: PaymentKind;
   label: string;
@@ -58,7 +60,24 @@ export type PaymentVia = {
   issuer?: string;
 };
 
-export type SubscriptionSource = "manual" | "gmail" | "sample";
+export type SavedCard = {
+  id: string;
+  network: CardNetwork;
+  last4: string;
+  nickname?: string;
+};
+
+export type SubscriptionSource = "manual" | "gmail" | "sample" | "statement" | "imap";
+
+export const MAX_MAILBOXES = 4;
+
+export type SavedMailbox = {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+};
 
 export type Subscription = {
   id: string;
@@ -134,4 +153,51 @@ export function cardLabel(
   const head =
     (network ? CARD_NETWORK_LABELS[network] : undefined) ?? issuer ?? "Card";
   return last4 ? `${head} ··${last4}` : head;
+}
+
+export function savedCardLabel(card: SavedCard): string {
+  return card.nickname
+    ? `${cardLabel(card.network, card.last4)} · ${card.nickname}`
+    : cardLabel(card.network, card.last4);
+}
+
+/** Digits only; if a full PAN is pasted, keep the last 4 and drop the rest. */
+export function takeLast4(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length <= 4) return digits;
+  return digits.slice(-4);
+}
+
+export function isLast4(value: string): boolean {
+  return /^\d{4}$/.test(value);
+}
+
+export function sanitizeLast4List(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const out: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string" && typeof value !== "number") continue;
+    const last4 = takeLast4(String(value));
+    if (!isLast4(last4) || out.includes(last4)) continue;
+    out.push(last4);
+    if (out.length >= MAX_SAVED_CARDS) break;
+  }
+  return out;
+}
+
+export function matchesSavedCard(
+  via: PaymentVia | undefined,
+  card: SavedCard,
+): boolean {
+  if (!via?.last4 || via.last4 !== card.last4) return false;
+  if (via.network && via.network !== card.network) return false;
+  return true;
+}
+
+/** Gmail query for issuer alerts that mention this last-4. Never pass a PAN. */
+export function last4SearchQuery(last4: string): string {
+  if (!isLast4(last4)) {
+    throw new Error("last4SearchQuery requires exactly four digits");
+  }
+  return `("ending with ${last4}" OR "card ending in ${last4}" OR "ending ${last4}" OR "•••• ${last4}") newer_than:2y`;
 }
