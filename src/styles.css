@@ -1,0 +1,136 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@theme {
+  --color-background: #0c0c0d;
+  --color-foreground: #f2f1ec;
+  --color-card: #151516;
+  --color-card-foreground: #f2f1ec;
+  --color-popover: #1c1c1e;
+  --color-popover-foreground: #f2f1ec;
+  --color-primary: #e4e2dc;
+  --color-primary-foreground: #0c0c0d;
+  --color-secondary: #1c1c1e;
+  --color-secondary-foreground: #f2f1ec;
+  --color-muted: #1c1c1e;
+  --color-muted-foreground: #8e8e89;
+  --color-accent: #222224;
+  --color-accent-foreground: #f2f1ec;
+  --color-destructive: #c45c4a;
+  --color-destructive-foreground: #f2f1ec;
+  --color-border: rgba(242, 241, 236, 0.1);
+  --color-input: rgba(242, 241, 236, 0.12);
+  --color-ring: #e4e2dc;
+  --color-ok: #7d9e86;
+  --color-warn: #c4a574;
+  --color-cat-entertainment: #c4b8a8;
+  --color-cat-software: #a8b4c4;
+  --color-cat-cloud: #9aa8b0;
+  --color-cat-health: #9eaea0;
+  --color-cat-utilities: #b0aaa2;
+  --color-cat-news: #b8b0a4;
+  --color-cat-education: #a4b0b4;
+  --color-cat-finance: #a8aea4;
+  --color-cat-other: #9a9a96;
+  --color-chart-1: #c4b8a8;
+  --color-chart-2: #a8b4c4;
+  --color-chart-3: #9eaea0;
+  --color-chart-4: #b0aaa2;
+  --color-chart-5: #9aa8b0;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+  --radius-3xl: 1.75rem;
+  --radius: 0.75rem;
+
+  --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Fraunces", ui-serif, Georgia, "Times New Roman", serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --shadow-border: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-border-hover: 0 0 0 1px rgba(255, 255, 255, 0.13);
+  --z-index-popover: 70;
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    background-color: var(--color-background);
+    background-image: linear-gradient(
+      180deg,
+      #121214 0%,
+      var(--color-background) 28%
+    );
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+    min-height: 100dvh;
+  }
+
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  h1,
+  h2,
+  h3 {
+    text-wrap: balance;
+  }
+
+  p {
+    text-wrap: pretty;
+  }
+
+  input[type="date"],
+  input[type="number"] {
+    color-scheme: dark;
+  }
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.stagger-in > * {
+  animation: rise 400ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.stagger-in > *:nth-child(1) {
+  animation-delay: 0ms;
+}
+.stagger-in > *:nth-child(2) {
+  animation-delay: 40ms;
+}
+.stagger-in > *:nth-child(3) {
+  animation-delay: 80ms;
+}
+.stagger-in > *:nth-child(4) {
+  animation-delay: 120ms;
+}
+.stagger-in > *:nth-child(5) {
+  animation-delay: 160ms;
+}
+.stagger-in > *:nth-child(6) {
+  animation-delay: 200ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stagger-in > * {
+    animation: none;
+  }
+}
