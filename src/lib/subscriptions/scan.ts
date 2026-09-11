@@ -46,15 +46,6 @@ export type ScanResponse = ScanOk | ScanErr;
 const SEARCHES: { query: string; max: number }[] = [
   { query: "from:email.apple.com (invoice OR purchases OR subscription OR receipt) newer_than:2y", max: 20 },
   { query: "from:stripe.com (receipt OR invoice) newer_than:1y", max: 20 },
-  { query: "from:billing3@three.com.hk newer_than:2y", max: 8 },
-  { query: 'from:github.com subject:"Payment Receipt" newer_than:2y', max: 6 },
-  { query: "from:HSBC_CNP@notification.hsbc.com.hk newer_than:6m", max: 16 },
-];
-
-const OUTLOOK_SEARCHES: { query: string; max: number }[] = [
-  { query: "from:email.apple.com", max: 20 },
-  { query: "from:stripe.com", max: 16 },
-  { query: "subject:subscription OR subject:invoice OR subject:receipt", max: 20 },
 ];
 
 function fail(result: {
@@ -98,44 +89,42 @@ async function scanConnector(options: {
     ...options.searches,
     ...options.last4s.map((last4) => ({ query: last4SearchQuery(last4), max: 12 })),
   ];
-  let first = true;
-  for (const search of searches) {
-    const result = await callTool(
-      options.searchTool,
-      { query: search.query, max_results: search.max },
-      { connectorType: options.connectorType },
-    );
-    if (!result.ok) {
-      const classified = classifyCallToolError(result);
-      if (classified?.kind === "not_connected" || classified?.kind === "scope_denied") {
-        return { fetched: 0, skipped: classified.message };
-      }
-      if (first && (result.loginRequired || result.pending)) {
-        return { fetched: 0, error: fail(result) };
-      }
-      if (first && classified?.kind === "error" && /unknown|not found|invalid tool/i.test(result.errorMessage ?? "")) {
-        return { fetched: 0, skipped: `${options.connectorType} mail search is not available here.` };
-      }
-      if (first) return { fetched: 0, error: fail(result) };
-      continue;
+  const result = await callTool(
+    options.searchTool,
+    { query: searches[0]?.query, max_results: searches[0]?.max ?? 10 },
+    { connectorType: options.connectorType },
+  );
+  if (!result.ok) {
+    const classified = classifyCallToolError(result);
+    if (classified?.kind === "not_connected" || classified?.kind === "scope_denied") {
+      return { fetched: 0, skipped: classified.message };
     }
-    first = false;
-    mergeStubs(options.byId, flattenGmailSearch(result.data));
+    if (result.loginRequired || result.pending) return { fetched: 0, error: fail(result) };
+    return { fetched: 0, skipped: `${options.connectorType} is not available here.` };
   }
+  mergeStubs(options.byId, flattenGmailSearch(result.data));
   return { fetched: 0 };
 }
 
 export const scanInbox = createServerFn({ method: "POST" })
-  .validator((input: { last4s?: unknown; imap?: unknown } | undefined) => ({
-    last4s: sanitizeLast4List(input?.last4s),
-    imap: sanitizeImapList(input?.imap),
-  }))
+  .validator((input: unknown) => {
+    const rec = input && typeof input === "object" ? (input as Record<string, unknown>) : {};
+    const inner =
+      rec.imap !== undefined || rec.last4s !== undefined
+        ? rec
+        : rec.data && typeof rec.data === "object"
+          ? (rec.data as Record<string, unknown>)
+          : rec;
+    return {
+      last4s: sanitizeLast4List(inner.last4s),
+      imap: sanitizeImapList(inner.imap),
+    };
+  })
   .handler(async ({ data }): Promise<ScanResponse> => {
     const byId = new Map<string, EmailStub>();
     const warnings: string[] = [];
     const sources: string[] = [];
     let fetched = 0;
-    let blocking: ScanErr | undefined;
 
     const gmail = await scanConnector({
       connectorType: ConnectorType.Gmail,
@@ -145,42 +134,29 @@ export const scanInbox = createServerFn({ method: "POST" })
       last4s: data.last4s,
       byId,
     });
-    if (gmail.error && gmail.error.kind !== "not_connected") blocking = gmail.error;
-    else if (gmail.skipped) warnings.push("Gmail: not connected in Grok.");
-    else {
+    if (gmail.skipped) warnings.push("Gmail: not connected in Grok.");
+    else if (!gmail.error) {
       sources.push("Gmail");
       fetched += gmail.fetched;
-    }
-
-    const outlook = await scanConnector({
-      connectorType: ConnectorType.Outlook,
-      searchTool: "outlook_search",
-      getTool: "outlook_get_message",
-      searches: OUTLOOK_SEARCHES,
-      last4s: data.last4s,
-      byId,
-    });
-    if (outlook.skipped) warnings.push("Outlook: not connected in Grok.");
-    else if (outlook.error && outlook.error.kind !== "not_connected") warnings.push("Outlook scan skipped.");
-    else if (!outlook.error) {
-      sources.push("Outlook");
-      fetched += outlook.fetched;
     }
 
     for (const account of data.imap) {
       const next = await fetchImapMailbox(account);
       mergeStubs(byId, next.stubs);
-      if (next.error) warnings.push(next.error);
+      if (next.error) warnings.push(`${account.email ?? account.user}: ${next.error}`);
       else sources.push(account.email ?? account.user);
     }
 
-    if (byId.size === 0 && blocking?.loginRequired) return blocking;
-    if (byId.size === 0 && blocking?.pending) return blocking;
     if (byId.size === 0 && sources.length === 0) {
+      const imapFail = warnings.find((w) =>
+        /IMAP|mailbox|login|app password|credentials|imapflow|library/i.test(w),
+      );
       return {
         ok: false,
-        kind: blocking?.kind ?? "not_connected",
-        message: "On this Mac, add an IMAP mailbox or drop a statement CSV. Grok Gmail only works in the Grok preview.",
+        kind: imapFail ? "error" : "not_connected",
+        message:
+          imapFail ??
+          "On this Mac, add an IMAP mailbox or drop a statement CSV. Grok Gmail only works in the Grok preview.",
         detail: warnings.join(" "),
       };
     }
