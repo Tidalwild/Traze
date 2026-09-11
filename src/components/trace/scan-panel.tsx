@@ -6,6 +6,7 @@ import { MailboxesPanel } from "@/components/trace/mailboxes-panel";
 import { StatementsPanel } from "@/components/trace/statements-panel";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { formatScanDate } from "@/lib/subscriptions/issuer";
 import { formatMoney } from "@/lib/subscriptions/money";
 import {
   discoveryToSubscription,
@@ -120,7 +121,7 @@ export function ScanPanel({ onAdded }: Props) {
           <div className="min-w-0 max-w-xl">
             <h2 className="font-display text-2xl font-medium tracking-tight">Scan inbox</h2>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              App password is saved in this browser on this Mac only — never GitHub. Paste it on the mailbox row, then Scan mail. Or drop a CSV.
+              Each row is the item, who sent it (From address), and the receipt dates.
             </p>
           </div>
           <Button onClick={() => void runScan()} disabled={busy}>
@@ -134,11 +135,7 @@ export function ScanPanel({ onAdded }: Props) {
           <p className="font-medium">{result.message}</p>
           {result.detail ? (
             <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">{result.detail}</p>
-          ) : (
-            <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-              Paste the app password on the mailbox row. A reload used to wipe it; it now stays in this browser.
-            </p>
-          )}
+          ) : null}
           <Button className="mt-5" variant="secondary" onClick={() => void runScan()}>
             Try again
           </Button>
@@ -156,12 +153,20 @@ export function ScanPanel({ onAdded }: Props) {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="truncate font-medium">{d.name}</p>
+                    <p className="mt-0.5 truncate text-sm text-muted-foreground">
+                      {d.issuer ?? "Inbox"}
+                      {d.issuerEmail ? ` · ${d.issuerEmail}` : ""}
+                    </p>
                     <p className="mt-0.5 text-sm text-muted-foreground">
-                      {CYCLE_LABELS[d.cycle]} · {d.chargeCount} hit{d.chargeCount === 1 ? "" : "s"}
+                      Last {formatScanDate(d.lastCharged)}
+                      {d.startedAt && d.startedAt !== d.lastCharged
+                        ? ` · since ${formatScanDate(d.startedAt)}`
+                        : ""}
+                      {` · ${CYCLE_LABELS[d.cycle]} · ${d.chargeCount} receipt${d.chargeCount === 1 ? "" : "s"}`}
                     </p>
                   </div>
                   <p className="font-medium tabular-nums">
-                    {d.amount > 0 ? formatMoney(d.amount, d.currency) : "—"}
+                    {d.amount > 0 ? formatMoney(d.amount, d.currency) : "Amount unknown"}
                   </p>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
@@ -169,7 +174,7 @@ export function ScanPanel({ onAdded }: Props) {
                   {items.some((item) => matchesLedger(item, d)) ? (
                     <span className="text-sm text-muted-foreground">On ledger</span>
                   ) : (
-                    <Button size="sm" onClick={() => addOne(d)} disabled={d.amount <= 0}>Add</Button>
+                    <Button size="sm" onClick={() => addOne(d)}>Add</Button>
                   )}
                 </div>
               </li>
