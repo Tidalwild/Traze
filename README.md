@@ -1,16 +1,40 @@
 # Traze
 
-Personal subscription ledger. Scan the Gmail connected to Grok for Apple receipts, Stripe invoices, 3 Hong Kong bills, GitHub, PayPal, and **card alerts across Visa, Mastercard, American Express, UnionPay, JCB, Discover, and Diners Club**.
+Personal subscription ledger. MIT.
 
-Banks do not have a direct login here. Card networks show up when the issuer emails this inbox (HSBC CNP alerts, Amex purchase notices, PayPal, and similar). Last-4 only — never a full PAN.
+Scan **Gmail and Outlook** (when opened in Grok), extra **IMAP** mailboxes (iCloud, Yahoo, another Gmail), and **issuer statement CSVs**. Match charges to saved cards by **last 4** only — never a full PAN. Banks do not log in from a card number.
+
+## Run from this repo
+
+You need **Node 22+** and git.
+
+```bash
+git clone https://github.com/Tidalwild/Traze.git
+cd Traze
+npm install
+npm run dev
+```
+
+Then open **http://localhost:8080** in a browser. Leave the terminal running. Stop with Ctrl+C.
+
+Check Node first: `node -v` should print `v22` or newer. On a Mac with Homebrew: `brew install node@22`.
+
+Ledger, cards, and IMAP passwords stay in **this browser** (`localStorage`). They are not uploaded.
+
+On your own host, Grok Gmail/Outlook connectors do not work. Use:
+
+1. Extra IMAP mailboxes (app password)
+2. Statement CSV from the bank / card app
+3. Manual add
 
 ## What it does
 
-- Monthly / yearly run-rate in HKD (or another display currency)
+- Monthly / yearly run-rate
 - Ledger with pause, cancel, mark charged
-- Calendar of upcoming charges
-- Inbox scan → add discoveries (recurring vs pay-as-you-go)
-- Manual add with card network + last 4 (Visa, Mastercard, Amex, UnionPay, JCB, Discover, Diners Club)
+- Calendar and insights (including by card)
+- Mail scan → add discoveries
+- Statement CSV → repeating merchants
+- Manual add with network + last 4
 
 ## Networks
 
@@ -18,13 +42,16 @@ Visa · Mastercard · American Express · UnionPay · JCB · Discover · Diners 
 
 ## How scan works
 
-Traze reads the one Gmail attached to Grok. Aliases and CCs in that inbox are included. There is no Plaid, Visa/Mastercard network login, or Apple ID API — those charges appear when Apple, Stripe, PayPal, or the card issuer mail a receipt or transaction alert.
+1. Save last 4 + network. Saving a card starts a scan.
+2. Grok: Gmail and Outlook connectors. Extra inboxes: IMAP app password.
+3. Drop a CSV from HSBC / Hang Seng / Amex / Chase / Citi for posted history.
+4. Parser keeps last-4 from alerts. Full numbers in mail are redacted.
 
-Full card numbers in email bodies are redacted before parse. Only last-4 is kept.
+Open-banking / Plaid issuer login is **not** included.
 
 ## Stack
 
-TanStack Start, React 19, Tailwind v4, Zustand (`localStorage`). Gmail is read through Grok’s connector gate — never from the browser. Auth and the database stay off.
+TanStack Start, React 19, Tailwind v4, Zustand (`localStorage`). Auth and the database stay off.
 
 ## License
 
