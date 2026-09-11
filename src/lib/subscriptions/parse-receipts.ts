@@ -1,13 +1,11 @@
 import type {
   BillingCycle,
-  CardNetwork,
   Category,
   Currency,
   PaymentVia,
   Status,
   Subscription,
 } from "./types.ts";
-import { cardLabel } from "./types.ts";
 
 export type EmailStub = {
   messageId: string;
@@ -109,30 +107,14 @@ function toAmount(raw: string): number {
 }
 
 export function parseMoney(blob: string): { amount: number; currency: Currency } | null {
-  const patterns: RegExp[] = [
-    /HK\$\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /US\$\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /\b(HKD|USD|EUR|GBP|SGD|CNY|JPY|AUD)\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /\$\s*([\d,]+(?:\.\d{1,2})?)/,
-    /€\s*([\d,]+(?:\.\d{1,2})?)/,
-    /£\s*([\d,]+(?:\.\d{1,2})?)/,
-  ];
-  for (const re of patterns) {
-    const m = blob.match(re);
-    if (!m) continue;
-    if (m[0].startsWith("HK$") || m[1] === "HKD") {
-      return { amount: toAmount(m[2] ?? m[1]), currency: "HKD" };
-    }
-    if (m[0].startsWith("US$") || m[1] === "USD") {
-      return { amount: toAmount(m[2] ?? m[1]), currency: "USD" };
-    }
-    if (["HKD", "USD", "EUR", "GBP", "SGD", "CNY", "JPY", "AUD"].includes((m[1] ?? "").toUpperCase())) {
-      return { amount: toAmount(m[2]), currency: m[1].toUpperCase() as Currency };
-    }
-    if (m[0].includes("€")) return { amount: toAmount(m[1]), currency: "EUR" };
-    if (m[0].includes("£")) return { amount: toAmount(m[1]), currency: "GBP" };
-    if (m[0].includes("$")) return { amount: toAmount(m[1]), currency: "USD" };
-  }
+  const hk = blob.match(/HK\$\s*([\d,]+(?:\.\d{1,2})?)/i);
+  if (hk) return { amount: toAmount(hk[1]), currency: "HKD" };
+  const us = blob.match(/US\$\s*([\d,]+(?:\.\d{1,2})?)/i);
+  if (us) return { amount: toAmount(us[1]), currency: "USD" };
+  const code = blob.match(/\b(HKD|USD|EUR|GBP|SGD|CNY|JPY|AUD)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  if (code) return { amount: toAmount(code[2]), currency: code[1].toUpperCase() as Currency };
+  const dollar = blob.match(/\$\s*([\d,]+(?:\.\d{1,2})?)/);
+  if (dollar) return { amount: toAmount(dollar[1]), currency: "USD" };
   return null;
 }
 
@@ -190,10 +172,11 @@ export function parseEmail(msg: EmailStub): ReceiptHit[] {
   const catalog = catalogMatch(blob);
   const money = parseMoney(blob);
   if (!catalog && !money) return [];
-  const name =
-    catalog?.name ??
-    msg.subject.replace(/your |invoice from |receipt|subscription|payment/gi, "").trim().slice(0, 48) ||
-    "Charge";
+  const cleaned = msg.subject
+    .replace(/your |invoice from |receipt|subscription|payment/gi, "")
+    .trim()
+    .slice(0, 48);
+  const name = catalog?.name ?? (cleaned || "Charge");
   return [
     {
       merchant: name,
@@ -225,6 +208,8 @@ export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
   for (const [, list] of groups) {
     const latest = [...list].sort((a, b) => b.date.localeCompare(a.date))[0];
     if (!latest) continue;
+    const oneOff = latest.kind === "one_off" && list.length < 2;
+    const usage = latest.kind === "usage";
     out.push({
       merchantKey: merchantKey(latest.merchant),
       name: latest.merchant,
@@ -234,11 +219,11 @@ export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
       category: latest.category,
       status: "active",
       nextBillingDate: latest.date,
-      startedAt: list[list.length - 1]?.date ?? latest.date,
+      startedAt: latest.date,
       url: latest.url,
       paymentVia: latest.paymentVia,
       inboxEmail: latest.inboxEmail,
-      kind: latest.kind === "one_off" && list.length < 2 ? "one_off" : latest.kind === "usage" ? "usage" : "recurring",
+      kind: usage ? "usage" : oneOff ? "one_off" : "recurring",
       chargeCount: list.length,
       lastCharged: latest.date,
       accounts: [],
