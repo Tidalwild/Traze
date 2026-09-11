@@ -42,10 +42,24 @@ export async function fetchImapMailbox(
           const date =
             dateRaw instanceof Date ? dateRaw.toUTCString() : dateRaw ? String(dateRaw) : "";
           let body = "";
-          if (msg.source) body = msg.source.toString("utf8").slice(0, 20_000);
-          const blob = `${subject}\n${body}`;
+          if (msg.source) {
+            const raw = Buffer.isBuffer(msg.source) ? msg.source : Buffer.from(msg.source);
+            try {
+              const { simpleParser } = await import("mailparser");
+              const parsed = await simpleParser(raw);
+              const html = parsed.html ? String(parsed.html) : "";
+              body = [parsed.text, html.replace(/<[^>]+>/g, " ")]
+                .filter(Boolean)
+                .join("\n")
+                .replace(/\s+/g, " ")
+                .slice(0, 12_000);
+            } catch {
+              body = stripImapSource(raw.toString("utf8").slice(0, 20_000));
+            }
+          }
+          const blob = `${from}\n${subject}\n${body}`;
           if (
-            !/receipt|invoice|subscription|transaction|renew|billing|apple|stripe|paypal|github|hsbc|amex|visa|mastercard/i.test(
+            !/receipt|invoice|subscription|transaction|renew|billing|apple|stripe|paypal|github|hsbc|amex|visa|mastercard|netflix|spotify|icloud|charged|payment|membership|statement|workspace|youtube|nordvpn|openai|microsoft/i.test(
               blob,
             )
           ) {
@@ -59,7 +73,7 @@ export async function fetchImapMailbox(
             to: to.length ? to : [account.email ?? account.user],
             date,
             snippet: subject,
-            body: stripImapSource(body),
+            body,
           });
         }
       }
@@ -87,19 +101,17 @@ function stripImapSource(source: string): string {
   return body
     .replace(/<[^>]+>/g, " ")
     .replace(/=\r?\n/g, "")
-    .replace(/=([0-9A-F]{2})/gi, (_, hex: string) =>
-      String.fromCharCode(Number.parseInt(hex, 16)),
-    )
+    .replace(/=([0-9A-F]{2})/gi, (_, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
     .replace(/\s+/g, " ")
     .slice(0, 8_000);
 }
 
 function tidyImapError(message: string): string {
-  if (/cannot find module|imapflow/i.test(message)) {
+  if (/cannot find module|imapflow|mailparser/i.test(message)) {
     return "IMAP library missing. In the Traze folder run npm install, then Scan mail again.";
   }
   if (/authentication|invalid credentials|login|alert/i.test(message)) {
-    return "IMAP login failed. Paste the app password in the field next to the mailbox row, enable IMAP in Gmail settings.";
+    return "IMAP login failed. Paste the app password on the mailbox row and enable IMAP in Gmail.";
   }
   if (/timeout|timed out|enotfound|econn/i.test(message)) {
     return "Could not reach that IMAP server from here.";
