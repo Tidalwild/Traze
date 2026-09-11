@@ -4,6 +4,8 @@ import {
   ConnectorType,
   type CallToolErrorKind,
 } from "@/lib/app-data";
+import { fetchImapMailbox } from "./imap";
+import { sanitizeImapList } from "./mail-accounts";
 import {
   collectScanMeta,
   flattenGmailSearch,
@@ -15,6 +17,7 @@ import {
   type EmailStub,
   type ReceiptHit,
 } from "./parse-receipts";
+import { last4SearchQuery, sanitizeLast4List } from "./types";
 
 export type ScanOk = {
   ok: true;
@@ -24,6 +27,8 @@ export type ScanOk = {
   inboxes: string[];
   appleIds: string[];
   cards: string[];
+  sources: string[];
+  warnings: string[];
 };
 
 export type ScanErr = {
@@ -39,46 +44,18 @@ export type ScanErr = {
 export type ScanResponse = ScanOk | ScanErr;
 
 const SEARCHES: { query: string; max: number }[] = [
-  {
-    query:
-      "from:email.apple.com (invoice OR purchases OR subscription OR receipt) newer_than:2y",
-    max: 20,
-  },
-  {
-    query: "from:stripe.com (receipt OR invoice) newer_than:1y",
-    max: 20,
-  },
-  {
-    query: "from:billing3@three.com.hk newer_than:2y",
-    max: 8,
-  },
-  {
-    query: 'from:github.com subject:"Payment Receipt" newer_than:2y',
-    max: 6,
-  },
-  {
-    query:
-      "from:HSBC_CNP@notification.hsbc.com.hk newer_than:6m",
-    max: 16,
-  },
-  {
-    query:
-      '(from:americanexpress.com OR from:amex.com OR from:paypal.com OR from:visa.com OR from:mastercard.com OR from:unionpay.com OR from:jcb.co.jp OR from:discover.com OR from:dinersclub.com OR from:hangseng.com OR from:citibank.com OR from:dbs.com) (receipt OR transaction OR alert OR statement OR subscription OR purchase) newer_than:1y',
-    max: 20,
-  },
-  {
-    query:
-      '(subject:"transaction notification" OR subject:"card transaction" OR subject:"credit card" OR subject:"American Express" OR subject:"Visa" OR subject:"Mastercard" OR subject:"UnionPay" OR subject:"銀聯" OR subject:"JCB" OR subject:"Discover" OR subject:"Diners") newer_than:6m -from:hsbc.communications -from:message.hsbc.com.hk',
-    max: 16,
-  },
-  {
-    query:
-      "(from:google.com OR from:workspace-noreply@google.com) (subscription OR billing OR invoice OR workspace) newer_than:2y",
-    max: 8,
-  },
+  { query: "from:email.apple.com (invoice OR purchases OR subscription OR receipt) newer_than:2y", max: 20 },
+  { query: "from:stripe.com (receipt OR invoice) newer_than:1y", max: 20 },
+  { query: "from:billing3@three.com.hk newer_than:2y", max: 8 },
+  { query: 'from:github.com subject:"Payment Receipt" newer_than:2y', max: 6 },
+  { query: "from:HSBC_CNP@notification.hsbc.com.hk newer_than:6m", max: 16 },
 ];
 
-const GET_MESSAGE_CAP = 16;
+const OUTLOOK_SEARCHES: { query: string; max: number }[] = [
+  { query: "from:email.apple.com", max: 20 },
+  { query: "from:stripe.com", max: 16 },
+  { query: "subject:subscription OR subject:invoice OR subject:receipt", max: 20 },
+];
 
 function fail(result: {
   errorMessage?: string;
@@ -92,7 +69,7 @@ function fail(result: {
   return {
     ok: false,
     kind: classified?.kind ?? "error",
-    message: classified?.message ?? "Could not read Gmail.",
+    message: classified?.message ?? "Could not read mail.",
     detail: classified?.detail,
     loginUrl: result.loginUrl,
     loginRequired: result.loginRequired,
@@ -100,59 +77,123 @@ function fail(result: {
   };
 }
 
-export const scanInbox = createServerFn({ method: "POST" }).handler(
-  async (): Promise<ScanResponse> => {
-    const { callTool } = await import("@/lib/app-data/client.server");
-    const byId = new Map<string, EmailStub>();
+function mergeStubs(byId: Map<string, EmailStub>, stubs: EmailStub[]) {
+  for (const stub of stubs) {
+    const existing = byId.get(stub.messageId);
+    if (!existing) byId.set(stub.messageId, stub);
+    else if (stub.body && !existing.body) byId.set(stub.messageId, stub);
+  }
+}
 
-    for (const search of SEARCHES) {
-      const result = await callTool(
-        "gmail_search",
-        { query: search.query, max_results: search.max },
-        { connectorType: ConnectorType.Gmail },
-      );
-      if (!result.ok) return fail(result);
-      for (const stub of flattenGmailSearch(result.data)) {
-        const existing = byId.get(stub.messageId);
-        if (!existing) {
-          byId.set(stub.messageId, stub);
-        } else if (stub.body && !existing.body) {
-          byId.set(stub.messageId, stub);
-        }
+async function scanConnector(options: {
+  connectorType: typeof ConnectorType.Gmail | typeof ConnectorType.Outlook;
+  searchTool: string;
+  getTool: string;
+  searches: { query: string; max: number }[];
+  last4s: string[];
+  byId: Map<string, EmailStub>;
+}): Promise<{ fetched: number; error?: ScanErr; skipped?: string }> {
+  const { callTool } = await import("@/lib/app-data/client.server");
+  const searches = [
+    ...options.searches,
+    ...options.last4s.map((last4) => ({ query: last4SearchQuery(last4), max: 12 })),
+  ];
+  let first = true;
+  for (const search of searches) {
+    const result = await callTool(
+      options.searchTool,
+      { query: search.query, max_results: search.max },
+      { connectorType: options.connectorType },
+    );
+    if (!result.ok) {
+      const classified = classifyCallToolError(result);
+      if (classified?.kind === "not_connected" || classified?.kind === "scope_denied") {
+        return { fetched: 0, skipped: classified.message };
       }
+      if (first && (result.loginRequired || result.pending)) {
+        return { fetched: 0, error: fail(result) };
+      }
+      if (first && classified?.kind === "error" && /unknown|not found|invalid tool/i.test(result.errorMessage ?? "")) {
+        return { fetched: 0, skipped: `${options.connectorType} mail search is not available here.` };
+      }
+      if (first) return { fetched: 0, error: fail(result) };
+      continue;
+    }
+    first = false;
+    mergeStubs(options.byId, flattenGmailSearch(result.data));
+  }
+  return { fetched: 0 };
+}
+
+export const scanInbox = createServerFn({ method: "POST" })
+  .validator((input: { last4s?: unknown; imap?: unknown } | undefined) => ({
+    last4s: sanitizeLast4List(input?.last4s),
+    imap: sanitizeImapList(input?.imap),
+  }))
+  .handler(async ({ data }): Promise<ScanResponse> => {
+    const byId = new Map<string, EmailStub>();
+    const warnings: string[] = [];
+    const sources: string[] = [];
+    let fetched = 0;
+    let blocking: ScanErr | undefined;
+
+    const gmail = await scanConnector({
+      connectorType: ConnectorType.Gmail,
+      searchTool: "gmail_search",
+      getTool: "gmail_get_message",
+      searches: SEARCHES,
+      last4s: data.last4s,
+      byId,
+    });
+    if (gmail.error && gmail.error.kind !== "not_connected") blocking = gmail.error;
+    else if (gmail.skipped) warnings.push("Gmail: not connected in Grok.");
+    else {
+      sources.push("Gmail");
+      fetched += gmail.fetched;
     }
 
-    const pendingFetch = [...byId.values()].filter(
-      (msg) => !msg.body && needsFullBody(msg),
-    );
-    let fetched = 0;
-    for (const msg of pendingFetch.slice(0, GET_MESSAGE_CAP)) {
-      const result = await callTool(
-        "gmail_get_message",
-        { message_id: msg.messageId },
-        { connectorType: ConnectorType.Gmail },
-      );
-      if (!result.ok) {
-        if (result.loginRequired || result.pending) return fail(result);
-        continue;
-      }
-      const full = normalizeMessage(result.data);
-      if (full) byId.set(full.messageId, { ...msg, ...full, snippet: full.snippet || msg.snippet });
-      fetched += 1;
+    const outlook = await scanConnector({
+      connectorType: ConnectorType.Outlook,
+      searchTool: "outlook_search",
+      getTool: "outlook_get_message",
+      searches: OUTLOOK_SEARCHES,
+      last4s: data.last4s,
+      byId,
+    });
+    if (outlook.skipped) warnings.push("Outlook: not connected in Grok.");
+    else if (outlook.error && outlook.error.kind !== "not_connected") warnings.push("Outlook scan skipped.");
+    else if (!outlook.error) {
+      sources.push("Outlook");
+      fetched += outlook.fetched;
+    }
+
+    for (const account of data.imap) {
+      const next = await fetchImapMailbox(account);
+      mergeStubs(byId, next.stubs);
+      if (next.error) warnings.push(next.error);
+      else sources.push(account.email ?? account.user);
+    }
+
+    if (byId.size === 0 && blocking?.loginRequired) return blocking;
+    if (byId.size === 0 && blocking?.pending) return blocking;
+    if (byId.size === 0 && sources.length === 0) {
+      return {
+        ok: false,
+        kind: blocking?.kind ?? "not_connected",
+        message: "On this Mac, add an IMAP mailbox or drop a statement CSV. Grok Gmail only works in the Grok preview.",
+        detail: warnings.join(" "),
+      };
     }
 
     const hits: ReceiptHit[] = [];
-    for (const msg of byId.values()) {
-      hits.push(...parseEmail(msg));
-    }
-    const discoveries = toDiscoveries(hits);
-    const meta = collectScanMeta(hits);
+    for (const msg of byId.values()) hits.push(...parseEmail(msg));
     return {
       ok: true,
-      discoveries,
+      discoveries: toDiscoveries(hits),
       scanned: byId.size,
       fetched,
-      ...meta,
+      sources,
+      warnings,
+      ...collectScanMeta(hits),
     };
-  },
-);
+  });
