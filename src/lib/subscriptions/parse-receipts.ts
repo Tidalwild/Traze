@@ -6,6 +6,7 @@ import type {
   Status,
   Subscription,
 } from "./types.ts";
+import { issuerFromAddress } from "./issuer.ts";
 
 export type EmailStub = {
   messageId: string;
@@ -34,6 +35,8 @@ export type ReceiptHit = {
   kind: HitKind;
   messageId: string;
   url?: string;
+  issuer?: string;
+  issuerEmail?: string;
 };
 
 export type Discovery = {
@@ -55,6 +58,8 @@ export type Discovery = {
   lastCharged: string;
   accounts: string[];
   confidence: "high" | "medium" | "low";
+  issuer?: string;
+  issuerEmail?: string;
 };
 
 type CatalogEntry = {
@@ -169,14 +174,15 @@ export function needsFullBody(msg: EmailStub): boolean {
 
 export function parseEmail(msg: EmailStub): ReceiptHit[] {
   const blob = `${msg.from}\n${msg.subject}\n${msg.snippet}\n${msg.body ?? ""}`;
-  const catalog = catalogMatch(blob);
+  const { issuer, email } = issuerFromAddress(msg.from);
+  const catalog = catalogMatch(blob) ?? catalogMatch(issuer);
   const money = parseMoney(blob);
-  if (!catalog && !money) return [];
+  if (!catalog && !money && !issuer) return [];
   const cleaned = msg.subject
     .replace(/your |invoice from |receipt|subscription|payment/gi, "")
     .trim()
     .slice(0, 48);
-  const name = catalog?.name ?? (cleaned || "Charge");
+  const name = catalog?.name ?? (cleaned || issuer);
   return [
     {
       merchant: name,
@@ -186,11 +192,13 @@ export function parseEmail(msg: EmailStub): ReceiptHit[] {
       cycle: catalog?.cycle ?? "monthly",
       category: catalog?.category ?? "other",
       channel: /apple/.test(msg.from) ? "apple" : "generic",
-      paymentVia: { kind: "other", label: catalog ? name : "Inbox" },
+      paymentVia: { kind: "other", label: issuer },
       kind: catalog ? "recurring" : "one_off",
       messageId: msg.messageId,
       url: catalog?.url,
       inboxEmail: msg.to[0],
+      issuer,
+      issuerEmail: email,
     },
   ];
 }
@@ -208,6 +216,7 @@ export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
   for (const [, list] of groups) {
     const latest = [...list].sort((a, b) => b.date.localeCompare(a.date))[0];
     if (!latest) continue;
+    const oldest = [...list].sort((a, b) => a.date.localeCompare(b.date))[0];
     const oneOff = latest.kind === "one_off" && list.length < 2;
     const usage = latest.kind === "usage";
     out.push({
@@ -219,7 +228,7 @@ export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
       category: latest.category,
       status: "active",
       nextBillingDate: latest.date,
-      startedAt: latest.date,
+      startedAt: oldest?.date ?? latest.date,
       url: latest.url,
       paymentVia: latest.paymentVia,
       inboxEmail: latest.inboxEmail,
@@ -228,6 +237,8 @@ export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
       lastCharged: latest.date,
       accounts: [],
       confidence: list.length >= 2 || catalogMatch(latest.merchant) ? "medium" : "low",
+      issuer: latest.issuer,
+      issuerEmail: latest.issuerEmail,
     });
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
