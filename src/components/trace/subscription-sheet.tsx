@@ -379,7 +379,7 @@ export function SubscriptionSheet({
                 maxLength={4}
                 value={draft.last4}
                 onChange={(e) => set("last4", e.target.value.replace(/\D/g, "").slice(0, 4))}
-                placeholder="8139"
+                placeholder="4242"
               />
             </Field>
           </div>

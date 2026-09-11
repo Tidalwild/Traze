@@ -167,9 +167,9 @@ export function createSample(now = new Date()): Subscription[] {
       paymentVia: {
         kind: "card",
         network: "visa",
-        last4: "8139",
+        last4: "4242",
         issuer: "HSBC",
-        label: cardLabel("visa", "8139", "HSBC"),
+        label: cardLabel("visa", "4242", "HSBC"),
       },
     },
     {
