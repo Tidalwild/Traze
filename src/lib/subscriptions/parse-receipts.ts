@@ -69,14 +69,23 @@ type CatalogEntry = {
 };
 
 const CATALOG: CatalogEntry[] = [
+  { match: /nordvpn/i, name: "NordVPN", category: "software", cycle: "yearly" },
+  { match: /icloud/i, name: "iCloud+", category: "cloud", cycle: "monthly" },
+  { match: /apple\s*one/i, name: "Apple One", category: "entertainment", cycle: "monthly" },
+  { match: /apple\s*tv/i, name: "Apple TV+", category: "entertainment" },
+  { match: /apple\s*music/i, name: "Apple Music", category: "entertainment" },
+  { match: /app store|invoice from apple|email\.apple\.com/i, name: "App Store", category: "entertainment", cycle: "monthly" },
   { match: /netflix/i, name: "Netflix", category: "entertainment", cycle: "monthly", url: "https://www.netflix.com" },
   { match: /spotify/i, name: "Spotify", category: "entertainment", url: "https://www.spotify.com" },
-  { match: /icloud/i, name: "iCloud+", category: "cloud", cycle: "monthly" },
-  { match: /apple\\s*one/i, name: "Apple One", category: "entertainment", cycle: "monthly" },
+  { match: /youtube\s*premium/i, name: "YouTube Premium", category: "entertainment" },
   { match: /github/i, name: "GitHub", category: "software", url: "https://github.com" },
-  { match: /nordvpn/i, name: "NordVPN", category: "software", cycle: "yearly" },
   { match: /workspace/i, name: "Google Workspace", category: "cloud", cycle: "monthly" },
-  { match: /youtube\\s*premium/i, name: "YouTube Premium", category: "entertainment" },
+  { match: /google\s*one/i, name: "Google One", category: "cloud", cycle: "monthly" },
+  { match: /openai|chatgpt/i, name: "ChatGPT", category: "software", cycle: "monthly" },
+  { match: /\bgrok\b|xai/i, name: "Grok xAI", category: "software" },
+  { match: /microsoft 365|office 365/i, name: "Microsoft 365", category: "software", cycle: "monthly" },
+  { match: /adobe/i, name: "Adobe", category: "software", cycle: "monthly" },
+  { match: /three\.com\.hk|3 hong kong/i, name: "3 Hong Kong", category: "utilities", cycle: "monthly" },
 ];
 
 export function catalogMatch(text: string): CatalogEntry | undefined {
@@ -84,7 +93,7 @@ export function catalogMatch(text: string): CatalogEntry | undefined {
 }
 
 export function merchantKey(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\\s+/g, " ").trim();
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 export function parseDateToIso(input: string, fallback?: string): string | undefined {
@@ -95,15 +104,42 @@ export function parseDateToIso(input: string, fallback?: string): string | undef
   return fallback;
 }
 
+function toAmount(raw: string): number {
+  return Number(raw.replace(/,/g, ""));
+}
+
 export function parseMoney(blob: string): { amount: number; currency: Currency } | null {
-  const m = blob.match(/HK\\$\\s*([\\d,]+(?:\\.\\d{1,2})?)/i) || blob.match(/\\$\\s*([\\d,]+(?:\\.\\d{1,2})?)/);
-  if (!m) return null;
-  if (/HK\\$/.test(m[0])) return { amount: Number(m[1].replace(/,/g, "")), currency: "HKD" };
-  return { amount: Number(m[1].replace(/,/g, "")), currency: "USD" };
+  const patterns: RegExp[] = [
+    /HK\$\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /US\$\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /\b(HKD|USD|EUR|GBP|SGD|CNY|JPY|AUD)\s*([\d,]+(?:\.\d{1,2})?)/i,
+    /\$\s*([\d,]+(?:\.\d{1,2})?)/,
+    /€\s*([\d,]+(?:\.\d{1,2})?)/,
+    /£\s*([\d,]+(?:\.\d{1,2})?)/,
+  ];
+  for (const re of patterns) {
+    const m = blob.match(re);
+    if (!m) continue;
+    if (m[0].startsWith("HK$") || m[1] === "HKD") {
+      return { amount: toAmount(m[2] ?? m[1]), currency: "HKD" };
+    }
+    if (m[0].startsWith("US$") || m[1] === "USD") {
+      return { amount: toAmount(m[2] ?? m[1]), currency: "USD" };
+    }
+    if (["HKD", "USD", "EUR", "GBP", "SGD", "CNY", "JPY", "AUD"].includes((m[1] ?? "").toUpperCase())) {
+      return { amount: toAmount(m[2]), currency: m[1].toUpperCase() as Currency };
+    }
+    if (m[0].includes("€")) return { amount: toAmount(m[1]), currency: "EUR" };
+    if (m[0].includes("£")) return { amount: toAmount(m[1]), currency: "GBP" };
+    if (m[0].includes("$")) return { amount: toAmount(m[1]), currency: "USD" };
+  }
+  return null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -111,7 +147,11 @@ function asString(value: unknown): string {
 
 export function flattenGmailSearch(data: unknown): EmailStub[] {
   const root = asRecord(data) ?? {};
-  const threads = Array.isArray(root.threads) ? root.threads : Array.isArray(data) ? data : [];
+  const threads = Array.isArray(root.threads)
+    ? root.threads
+    : Array.isArray(data)
+      ? data
+      : [];
   const out: EmailStub[] = [];
   for (const thread of threads) {
     const rec = asRecord(thread);
@@ -141,28 +181,35 @@ export function normalizeMessage(raw: unknown): EmailStub | null {
 }
 
 export function needsFullBody(msg: EmailStub): boolean {
-  return /transaction|invoice|receipt|subscription/i.test(`${msg.from} ${msg.subject}`);
+  const blob = `${msg.from} ${msg.subject} ${msg.snippet}`;
+  return /transaction|invoice|receipt|subscription/i.test(blob) && !parseMoney(blob);
 }
 
 export function parseEmail(msg: EmailStub): ReceiptHit[] {
-  const blob = `${msg.subject}\n${msg.snippet}\n${msg.body ?? ""}`;
+  const blob = `${msg.from}\n${msg.subject}\n${msg.snippet}\n${msg.body ?? ""}`;
   const catalog = catalogMatch(blob);
   const money = parseMoney(blob);
-  if (!money) return [];
-  const name = catalog?.name ?? (msg.subject.replace(/receipt|invoice|subscription/gi, "").trim() || "Charge");
-  return [{
-    merchant: name,
-    amount: money.amount,
-    currency: money.currency,
-    date: parseDateToIso(msg.date) ?? new Date().toISOString().slice(0, 10),
-    cycle: catalog?.cycle ?? "monthly",
-    category: catalog?.category ?? "other",
-    channel: "generic",
-    paymentVia: { kind: "other", label: "Inbox" },
-    kind: catalog ? "recurring" : "one_off",
-    messageId: msg.messageId,
-    url: catalog?.url,
-  }];
+  if (!catalog && !money) return [];
+  const name =
+    catalog?.name ??
+    msg.subject.replace(/your |invoice from |receipt|subscription|payment/gi, "").trim().slice(0, 48) ||
+    "Charge";
+  return [
+    {
+      merchant: name,
+      amount: money?.amount ?? 0,
+      currency: money?.currency ?? "HKD",
+      date: parseDateToIso(msg.date) ?? new Date().toISOString().slice(0, 10),
+      cycle: catalog?.cycle ?? "monthly",
+      category: catalog?.category ?? "other",
+      channel: /apple/.test(msg.from) ? "apple" : "generic",
+      paymentVia: { kind: "other", label: catalog ? name : "Inbox" },
+      kind: catalog ? "recurring" : "one_off",
+      messageId: msg.messageId,
+      url: catalog?.url,
+      inboxEmail: msg.to[0],
+    },
+  ];
 }
 
 export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
@@ -176,7 +223,7 @@ export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
   }
   const out: Discovery[] = [];
   for (const [, list] of groups) {
-    const latest = list[0];
+    const latest = [...list].sort((a, b) => b.date.localeCompare(a.date))[0];
     if (!latest) continue;
     out.push({
       merchantKey: merchantKey(latest.merchant),
@@ -187,17 +234,18 @@ export function toDiscoveries(hits: ReceiptHit[]): Discovery[] {
       category: latest.category,
       status: "active",
       nextBillingDate: latest.date,
-      startedAt: latest.date,
+      startedAt: list[list.length - 1]?.date ?? latest.date,
       url: latest.url,
       paymentVia: latest.paymentVia,
-      kind: latest.kind === "one_off" ? "one_off" : "recurring",
+      inboxEmail: latest.inboxEmail,
+      kind: latest.kind === "one_off" && list.length < 2 ? "one_off" : latest.kind === "usage" ? "usage" : "recurring",
       chargeCount: list.length,
       lastCharged: latest.date,
       accounts: [],
-      confidence: catalogMatch(latest.merchant) ? "medium" : "low",
+      confidence: list.length >= 2 || catalogMatch(latest.merchant) ? "medium" : "low",
     });
   }
-  return out;
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 export function collectScanMeta(hits: ReceiptHit[]) {
