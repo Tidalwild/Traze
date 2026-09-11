@@ -17,7 +17,6 @@ import { newId, useLedger } from "@/lib/subscriptions/store";
 import { CYCLE_LABELS, STATUS_LABELS } from "@/lib/subscriptions/types";
 
 type Props = { onAdded?: () => void };
-
 const PASS_KEY = "traze-imap-pass";
 
 export function ScanPanel({ onAdded }: Props) {
@@ -27,20 +26,19 @@ export function ScanPanel({ onAdded }: Props) {
   const addItem = useLedger((s) => s.addItem);
   const dismissed = useLedger((s) => s.dismissedKeys);
   const dismissDiscovery = useLedger((s) => s.dismissDiscovery);
-  const lastScanAt = useLedger((s) => s.lastScanAt);
   const setLastScanAt = useLedger((s) => s.setLastScanAt);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ScanResponse | null>(null);
   const [passwords, setPasswords] = useState<Record<string, string>>(() => {
     try {
-      return JSON.parse(sessionStorage.getItem(PASS_KEY) ?? "{}");
+      return JSON.parse(localStorage.getItem(PASS_KEY) ?? "{}");
     } catch {
       return {};
     }
   });
 
   useEffect(() => {
-    sessionStorage.setItem(PASS_KEY, JSON.stringify(passwords));
+    localStorage.setItem(PASS_KEY, JSON.stringify(passwords));
   }, [passwords]);
 
   const runScan = useCallback(async () => {
@@ -52,14 +50,14 @@ export function ScanPanel({ onAdded }: Props) {
           port: box.port,
           user: box.user,
           email: box.user,
-          pass: passwords[box.id] ?? "",
+          pass: passwords[box.user] ?? passwords[box.id] ?? "",
         }))
         .filter((box) => box.pass);
       if (mailboxes.length > 0 && imap.length === 0) {
         setResult({
           ok: false,
           kind: "error",
-          message: "Enter the app password next to the mailbox, then Scan mail.",
+          message: "Paste the app password in the box on the Gmail row, then Scan mail.",
         });
         return;
       }
@@ -117,13 +115,12 @@ export function ScanPanel({ onAdded }: Props) {
           setLastScanAt(new Date().toISOString());
         }}
       />
-
       <section className="rounded-3xl bg-card p-5 shadow-[var(--shadow-border)]">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 max-w-xl">
             <h2 className="font-display text-2xl font-medium tracking-tight">Scan inbox</h2>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
-              On this Mac, Grok Gmail is not attached. Paste the app password next to the mailbox, or drop a bank CSV.
+              App password is saved in this browser on this Mac only — never GitHub. Paste it on the mailbox row, then Scan mail. Or drop a CSV.
             </p>
           </div>
           <Button onClick={() => void runScan()} disabled={busy}>
@@ -132,24 +129,26 @@ export function ScanPanel({ onAdded }: Props) {
           </Button>
         </div>
       </section>
-
       {result && !result.ok ? (
         <div className="rounded-3xl bg-card px-5 py-8 text-center shadow-[var(--shadow-border)]">
           <p className="font-medium">{result.message}</p>
-          <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
-            The mailbox address is saved. The app password is not — paste it in the box next to the address, then scan.
-          </p>
+          {result.detail ? (
+            <p className="mx-auto mt-2 max-w-lg text-sm text-muted-foreground">{result.detail}</p>
+          ) : (
+            <p className="mx-auto mt-2 max-w-sm text-sm text-muted-foreground">
+              Paste the app password on the mailbox row. A reload used to wipe it; it now stays in this browser.
+            </p>
+          )}
           <Button className="mt-5" variant="secondary" onClick={() => void runScan()}>
             Try again
           </Button>
         </div>
       ) : null}
-
       {result?.ok ? (
         <ul className="flex flex-col gap-3">
           {visible.length === 0 ? (
             <p className="rounded-3xl bg-card px-5 py-8 text-center text-sm text-muted-foreground shadow-[var(--shadow-border)]">
-              No repeating charges in that scan. Add by hand, or drop a statement CSV.
+              Mail was read but no repeating charges matched. Drop a statement CSV, or add by hand.
             </p>
           ) : (
             visible.map((d) => (
@@ -167,17 +166,11 @@ export function ScanPanel({ onAdded }: Props) {
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <Badge variant="outline">{STATUS_LABELS[d.status]}</Badge>
-                  <Badge variant="outline">{d.paymentVia.label}</Badge>
                   {items.some((item) => matchesLedger(item, d)) ? (
                     <span className="text-sm text-muted-foreground">On ledger</span>
                   ) : (
-                    <Button size="sm" onClick={() => addOne(d)} disabled={d.amount <= 0}>
-                      Add
-                    </Button>
+                    <Button size="sm" onClick={() => addOne(d)} disabled={d.amount <= 0}>Add</Button>
                   )}
-                  <Button size="sm" variant="ghost" onClick={() => dismissDiscovery(d.merchantKey)}>
-                    Hide
-                  </Button>
                 </div>
               </li>
             ))
