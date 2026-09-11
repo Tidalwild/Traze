@@ -1,12 +1,6 @@
 import { createServerFn } from "@tanstack/react-start";
-import {
-  parseEmail,
-  type EmailStub,
-} from "./parse-receipts";
-import {
-  sanitizeImapList,
-  type ImapAccountInput,
-} from "./mail-accounts";
+import { parseEmail, type EmailStub } from "./parse-receipts";
+import { sanitizeImapList, type ImapAccountInput } from "./mail-accounts";
 
 export type { ImapAccountInput } from "./mail-accounts";
 export { IMAP_PRESETS, sanitizeImapAccount, sanitizeImapList } from "./mail-accounts";
@@ -46,15 +40,9 @@ export async function fetchImapMailbox(
           const subject = env?.subject ?? "";
           const dateRaw = env?.date;
           const date =
-            dateRaw instanceof Date
-              ? dateRaw.toUTCString()
-              : dateRaw
-                ? String(dateRaw)
-                : "";
+            dateRaw instanceof Date ? dateRaw.toUTCString() : dateRaw ? String(dateRaw) : "";
           let body = "";
-          if (msg.source) {
-            body = msg.source.toString("utf8").slice(0, 20_000);
-          }
+          if (msg.source) body = msg.source.toString("utf8").slice(0, 20_000);
           const blob = `${subject}\n${body}`;
           if (
             !/receipt|invoice|subscription|transaction|renew|billing|apple|stripe|paypal|github|hsbc|amex|visa|mastercard/i.test(
@@ -87,10 +75,7 @@ export async function fetchImapMailbox(
   }
 }
 
-function formatImapAddr(addr?: {
-  name?: string;
-  address?: string;
-}): string {
+function formatImapAddr(addr?: { name?: string; address?: string }): string {
   if (!addr) return "";
   if (addr.name && addr.address) return `${addr.name} <${addr.address}>`;
   return addr.address ?? addr.name ?? "";
@@ -110,13 +95,16 @@ function stripImapSource(source: string): string {
 }
 
 function tidyImapError(message: string): string {
-  if (/authentication|invalid credentials|login/i.test(message)) {
-    return "IMAP login failed. Use an app password, not the mailbox password.";
+  if (/cannot find module|imapflow/i.test(message)) {
+    return "IMAP library missing. In the Traze folder run npm install, then Scan mail again.";
+  }
+  if (/authentication|invalid credentials|login|alert/i.test(message)) {
+    return "IMAP login failed. Paste the app password in the field next to the mailbox row, enable IMAP in Gmail settings.";
   }
   if (/timeout|timed out|enotfound|econn/i.test(message)) {
     return "Could not reach that IMAP server from here.";
   }
-  return "Could not read that mailbox.";
+  return `Could not read that mailbox (${message.slice(0, 80)})`;
 }
 
 export const scanImapMailboxes = createServerFn({ method: "POST" })
@@ -129,13 +117,7 @@ export const scanImapMailboxes = createServerFn({ method: "POST" })
     for (const account of data.accounts) {
       const next = await fetchImapMailbox(account);
       stubs.push(...next.stubs);
-      if (next.error) {
-        errors.push(`${account.email ?? account.user}: ${next.error}`);
-      }
+      if (next.error) errors.push(`${account.email ?? account.user}: ${next.error}`);
     }
-    return {
-      stubs,
-      errors,
-      hits: stubs.flatMap((msg) => parseEmail(msg)),
-    };
+    return { stubs, errors, hits: stubs.flatMap((msg) => parseEmail(msg)) };
   });

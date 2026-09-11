@@ -28,7 +28,7 @@ export function sanitizeImapAccount(raw: unknown): ImapAccountInput | null {
   if (!rec) return null;
   const host = String(rec.host ?? "").trim().toLowerCase();
   const user = String(rec.user ?? rec.email ?? "").trim();
-  const pass = String(rec.pass ?? "").trim();
+  const pass = String(rec.pass ?? "").replace(/\s+/g, "");
   const port = Number(rec.port ?? 993);
   if (!HOST_OK.test(host) || host.length > 80) return null;
   if (!user || user.length > USER_MAX || user.includes("\n")) return null;
